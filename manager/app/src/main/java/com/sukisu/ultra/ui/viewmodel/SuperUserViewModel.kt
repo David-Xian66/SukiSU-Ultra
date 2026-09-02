@@ -287,7 +287,7 @@ class SuperUserViewModel(
 
     private fun buildGroups(
         apps: List<AppInfo>,
-        umount: (Int) -> Boolean = { Natives.uidShouldUmount(it) },
+        umount: (Int) -> Boolean = { safeUidShouldUmount(it) },
     ): List<GroupedApps> {
         val collator = Collator.getInstance(Locale.getDefault())
         val comparator = compareBy<AppInfo> {
