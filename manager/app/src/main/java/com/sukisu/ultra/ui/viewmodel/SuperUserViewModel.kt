@@ -343,27 +343,46 @@ class SuperUserViewModel(
         refreshMutex.withLock {
             _uiState.update { it.copy(isRefreshing = true, error = null) }
 
-            repo.getAppList().onSuccess { (newApps, ids) ->
+            val result = repo.getAppList()
+            val (newApps, ids) = result.getOrNull() ?: emptyList<AppInfo>() to emptyList()
+            val failure = result.exceptionOrNull()
+
+            // Post-process on the IO dispatcher, but wrap so that any single
+            // JNI / ksud failure (e.g. uidShouldUmount on Android 10) cannot
+            // strand _uiState in isRefreshing=true forever. The UI must
+            // always reach a terminal state (success with the list we have,
+            // or error).
+            runCatching {
                 val (cachedGroups, grouped) = withContext(Dispatchers.IO) {
                     val cached = buildCachedGroups(newApps)
                     val umountByUid = cached.associate { it.uid to it.shouldUmount }
-                    cached to buildGroups(filterApps(newApps)) { umountByUid[it] ?: Natives.uidShouldUmount(it) }
+                    cached to buildGroups(filterApps(newApps)) {
+                        umountByUid[it] ?: safeUidShouldUmount(it)
+                    }
                 }
-
-                // Update cache for static method
                 synchronized(appsLock) { cachedApps = newApps }
                 updateCachedGroupedApps(cachedGroups)
                 updateVisibleApps(grouped)
-                _uiState.update { it.copy(userIds = ids, isRefreshing = false, hasLoaded = true) }
             }.onFailure { e ->
-                Log.e(TAG, "fetchAppList failed", e)
-                _uiState.update {
-                    it.copy(
-                        isRefreshing = false,
-                        hasLoaded = true,
-                        error = e
-                    )
+                Log.e(TAG, "fetchAppList post-processing failed; publishing raw list", e)
+                // Still publish what we have so the UI isn't blank.
+                runCatching {
+                    val grouped = withContext(Dispatchers.IO) {
+                        buildGroups(filterApps(newApps)) { false }
+                    }
+                    synchronized(appsLock) { cachedApps = newApps }
+                    updateCachedGroupedApps(buildCachedGroups(newApps))
+                    updateVisibleApps(grouped)
                 }
+            }
+
+            _uiState.update {
+                it.copy(
+                    userIds = ids,
+                    isRefreshing = false,
+                    hasLoaded = true,
+                    error = failure ?: _uiState.value.error,
+                )
             }
 
             isNeedRefresh = false
@@ -375,33 +394,56 @@ class SuperUserViewModel(
             val currentApps = synchronized(appsLock) { cachedApps }
             if (currentApps.isEmpty()) return
 
-            repo.refreshProfiles(currentApps).onSuccess { updatedApps ->
-                // Update cache for static method
+            val result = repo.refreshProfiles(currentApps)
+            val updatedApps = result.getOrNull() ?: return
+            val failure = result.exceptionOrNull()
+
+            // Same hardening as fetchAppList — never leave isRefreshing=true
+            // and never let a single uidShouldUmount call take down the
+            // whole list refresh.
+            runCatching {
                 synchronized(appsLock) { cachedApps = updatedApps }
 
                 val (cachedGroups, grouped) = withContext(Dispatchers.IO) {
                     val cached = buildCachedGroups(updatedApps)
                     val umountByUid = cached.associate { it.uid to it.shouldUmount }
                     val visible = buildGroups(filterApps(updatedApps)) {
-                        umountByUid[it] ?: Natives.uidShouldUmount(it)
+                        umountByUid[it] ?: safeUidShouldUmount(it)
                     }
-                    val result = if (resort) {
+                    val resultList = if (resort) {
                         visible
                     } else {
                         val byUid = visible.associateBy { it.uid }
                         _uiState.value.groupedApps.map { group ->
-                            byUid[group.uid] ?: group.copy(shouldUmount = Natives.uidShouldUmount(group.uid))
+                            byUid[group.uid] ?: group.copy(shouldUmount = safeUidShouldUmount(group.uid))
                         }
                     }
-                    cached to result
+                    cached to resultList
                 }
                 updateCachedGroupedApps(cachedGroups)
-
                 updateVisibleApps(grouped, resort = resort)
-                _uiState.update { it.copy(isRefreshing = false) }
-                isNeedRefresh = false
+            }.onFailure { e ->
+                Log.e(TAG, "refreshAppList post-processing failed", e)
             }
+
+            _uiState.update {
+                it.copy(isRefreshing = false, error = failure ?: _uiState.value.error)
+            }
+            isNeedRefresh = false
         }
+    }
+
+    /**
+     * Wrapper that swallows transient JNI / ksud failures from
+     * uidShouldUmount. Android 10 occasionally returns errors for uids
+     * the kernel hasn't loaded yet; failing the whole SuperUser list for
+     * one bad uid would blank the UI.
+     */
+    private fun safeUidShouldUmount(uid: Int): Boolean = try {
+        Natives.uidShouldUmount(uid)
+    } catch (e: Throwable) {
+        Log.w(TAG, "uidShouldUmount failed for $uid", e)
+        false
     }
 
     fun loadAppList(force: Boolean = false, resort: Boolean = true): Job {
