@@ -28,24 +28,74 @@ fn scan_driver_fd() -> Option<RawFd> {
     None
 }
 
+// Preferred bootstrap on Android 10+: use the kernel's task_prctl LSM hook
+// to install the [ksu_driver] anon-inode fd. The hook contract is:
+//
+//   prctl(KSU_INSTALL_MAGIC1, KSU_INSTALL_MAGIC2, &fd, 0, 0) -> 0
+//
+// where `fd` (arg3) is a userspace pointer to an int that the hook fills
+// in via copy_to_user(). prctl(2) is always permitted in app sandboxes,
+// so this path survives the strict seccomp filter that zygote installs on
+// Android 10 and would otherwise SIGSYS a sys_reboot fallback.
+//
+// Returns Some(fd) on success, None if the kernel does not carry the hook
+// or ksu_install_fd failed.
+fn try_prctl_bootstrap() -> Option<RawFd> {
+    let mut fd: libc::c_int = -1;
+    let ret = unsafe {
+        libc::prctl(
+            ksu_uapi::KSU_INSTALL_MAGIC1 as libc::c_int,
+            ksu_uapi::KSU_INSTALL_MAGIC2 as libc::c_ulong,
+            &mut fd as *mut libc::c_int as libc::c_ulong,
+            0,
+            0,
+        )
+    };
+    if ret == 0 && fd >= 0 {
+        Some(fd)
+    } else {
+        None
+    }
+}
+
+// Whether the current task is under a seccomp filter. PR_GET_SECCOMP
+// returns SECCOMP_MODE_DISABLED (0), STRICT (1) or FILTER (2). Only call
+// the reboot fallback when the filter is absent, otherwise Android 10's
+// zygote policy will SIGSYS the syscall before the kprobe sees it.
+fn seccomp_is_active() -> bool {
+    unsafe { libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) > 0 }
+}
+
+// Legacy fallback: kprobe on sys_reboot. Available on every KSU kernel
+// that ships with supercall.c, but unsafe under seccomp — guarded above.
+fn try_reboot_bootstrap() -> Option<RawFd> {
+    if seccomp_is_active() {
+        return None;
+    }
+    let mut fd: libc::c_int = -1;
+    unsafe {
+        libc::syscall(
+            libc::SYS_reboot,
+            ksu_uapi::KSU_INSTALL_MAGIC1,
+            ksu_uapi::KSU_INSTALL_MAGIC2,
+            0,
+            &mut fd,
+        );
+    };
+    if fd >= 0 { Some(fd) } else { None }
+}
+
 // Get cached driver fd
 fn init_driver_fd() -> Option<RawFd> {
-    let fd = scan_driver_fd();
-    if fd.is_none() {
-        let mut fd = -1;
-        unsafe {
-            libc::syscall(
-                libc::SYS_reboot,
-                ksu_uapi::KSU_INSTALL_MAGIC1,
-                ksu_uapi::KSU_INSTALL_MAGIC2,
-                0,
-                &mut fd,
-            );
-        };
-        if fd >= 0 { Some(fd) } else { None }
-    } else {
-        fd
+    if let Some(fd) = scan_driver_fd() {
+        return Some(fd);
     }
+    // Preferred: LSM task_prctl bootstrap (Android 10 friendly).
+    if let Some(fd) = try_prctl_bootstrap() {
+        return Some(fd);
+    }
+    // Fallback: sys_reboot kprobe, only when seccomp is not active.
+    try_reboot_bootstrap()
 }
 
 // ioctl wrapper using libc
