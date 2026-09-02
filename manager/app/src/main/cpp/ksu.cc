@@ -63,11 +63,73 @@ static inline int scan_driver_fd() {
     return found;
 }
 
+// Mirrors the ksucalls::try_prctl_bootstrap() path on the userspace side:
+// ask the kernel's task_prctl LSM hook to install the [ksu_driver]
+// anon-inode fd in this process and write it back via copy_to_user.
+// prctl(2) is always permitted in app sandboxes, so this survives
+// Android 10's zygote seccomp filter that would SIGSYS a sys_reboot
+// fallback. Requires the kernel to carry ksu_task_prctl; returns -1
+// otherwise (hook absent or ksu_install_fd refused).
+static inline int prctl_install_fd() {
+    int installed_fd = -1;
+    int ret = prctl(
+        static_cast<int>(KSU_INSTALL_MAGIC1),
+        static_cast<int>(KSU_INSTALL_MAGIC2),
+        &installed_fd,
+        0,
+        0
+    );
+    if (ret == 0 && installed_fd >= 0) {
+        return installed_fd;
+    }
+    return -1;
+}
+
+// Whether the current task is under a seccomp filter. Used to gate the
+// sys_reboot fallback so we never trigger SIGSYS / SYS_SECCOMP on
+// Android 10 (PR_GET_SECCOMP returns SECCOMP_MODE_DISABLED=0,
+// STRICT=1, FILTER=2 — anything >0 means active).
+static inline bool seccomp_is_active() {
+    return prctl(PR_GET_SECCOMP, 0, 0, 0, 0) > 0;
+}
+
+// Legacy fallback: kprobe on sys_reboot. Available on every KSU kernel
+// (supercall.c) but unsafe under seccomp, hence the guard above.
+static inline int reboot_install_fd() {
+    if (seccomp_is_active()) {
+        return -1;
+    }
+    int installed_fd = -1;
+    long ret = syscall(
+        __NR_reboot,
+        static_cast<unsigned long>(KSU_INSTALL_MAGIC1),
+        static_cast<unsigned long>(KSU_INSTALL_MAGIC2),
+        0,
+        &installed_fd
+    );
+    if (ret == 0 && installed_fd >= 0) {
+        return installed_fd;
+    }
+    return -1;
+}
+
 template<typename... Args>
 static int ksuctl(unsigned long op, Args &&... args) {
 
     if (fd < 0) {
+        // 1. Inherited fd from a parent process that already ran
+        //    ksu_install_fd (e.g. setresuid path).
         fd = scan_driver_fd();
+    }
+    if (fd < 0) {
+        // 2. LSM task_prctl bootstrap (Android 10 friendly, requires
+        //    ksu_task_prctl in the kernel module).
+        fd = prctl_install_fd();
+    }
+    if (fd < 0) {
+        // 3. Legacy sys_reboot kprobe fallback (only when seccomp is
+        //    off — Android 10 zygote filter would SIGSYS otherwise).
+        fd = reboot_install_fd();
     }
 
     static_assert(sizeof...(Args) <= 1, "ioctl expects at most one extra argument");
