@@ -36,7 +36,7 @@ class KsuService : RootService() {
             val ids = extractUserIds(users)
             if (ids.isNotEmpty()) return ids
         } catch (_: NoSuchMethodException) {
-            Log.i(TAG, "getAliveUsers unavailable, using UserManager.getUsers()")
+            Log.i(TAG, "getAliveUsers unavailable, trying UserManager.getUsers()")
         } catch (e: Exception) {
             Log.e(TAG, "getAliveUsers reflection failed", e)
         }
@@ -46,16 +46,31 @@ class KsuService : RootService() {
         //    (deprecated in API 30). On Android 10 it returns the same
         //    set as getAliveUsers() does on API 30+. The getter is hidden
         //    from the compileSdk 37 stubs, so go through reflection.
+        //    Some OEM ROMs @hide even this method, so a NoSuchMethodException
+        //    here is expected and falls through to the int[] path.
         try {
             val method = um.javaClass.getMethod("getUsers")
             val users = method.invoke(um) as List<*>
             val ids = extractUserIds(users)
             if (ids.isNotEmpty()) return ids
+        } catch (_: NoSuchMethodException) {
+            Log.i(TAG, "getUsers unavailable, trying UserManager.getUserIds()")
         } catch (e: Exception) {
             Log.e(TAG, "UserManager.getUsers() reflection failed", e)
         }
 
-        // 3) Last-resort fallback so we never return an empty array and
+        // 3) Last reflection fallback: UserManager.getUserIds() returns
+        //    int[] directly. Hidden from public SDK, but stable since
+        //    API 17 across AOSP and OEM ROMs.
+        try {
+            val method = um.javaClass.getMethod("getUserIds")
+            val ids = method.invoke(um) as IntArray
+            if (ids != null && ids.isNotEmpty()) return ids
+        } catch (e: Exception) {
+            Log.e(TAG, "UserManager.getUserIds() reflection failed", e)
+        }
+
+        // 4) Hard fallback so we never return an empty array and
         //    accidentally produce a zero-package response.
         return intArrayOf(0)
     }
