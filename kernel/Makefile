@@ -151,7 +151,13 @@ $(info -- You have not integrated susfs in your kernel yet.)
 $(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
 endif
 
-ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
-ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ccflags-y += -Wno-strict-prototypes -Wno-missing-prototypes
+ccflags-y += -Wno-unused-function
+
+# -Wno-gcc-compat and -Wno-int-conversion are clang-only; gate them via cc-option
+# so GCC 4.9 (which lacks these warnings) does not fail under -Werror.
+ccflags-y += $(call cc-option, -Wno-gcc-compat)
+ccflags-y += $(call cc-option, -Wno-int-conversion)
+ccflags-y += $(call cc-option, -Wno-declaration-after-statement)
 
 # Keep a new line here!! Because someone may append config

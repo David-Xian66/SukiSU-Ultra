@@ -486,7 +486,7 @@ static int do_nuke_ext4_sysfs(void __user *arg)
 
     memset(mnt, 0, sizeof(mnt));
 
-    ret = ksu_strncpy_from_user_nofault(mnt, cmd.arg, sizeof(mnt));
+    ret = ksu_strncpy_from_user_nofault(mnt, u64_to_user_ptr(cmd.arg), sizeof(mnt));
     if (ret < 0) {
         pr_err("nuke ext4 copy mnt failed: %ld\n", ret);
         return -EFAULT;
@@ -764,8 +764,9 @@ static int list_try_umount(void __user *arg)
 // 100. GET_FULL_VERSION - Get full version string
 static int do_get_full_version(void __user *arg)
 {
-    struct ksu_get_full_version_cmd cmd = { 0 };
+    struct ksu_get_full_version_cmd cmd;
 
+    memset(&cmd, 0, sizeof(cmd));
     strscpy(cmd.version_full, KSU_VERSION_FULL, sizeof(cmd.version_full));
 
     if (copy_to_user(arg, &cmd, sizeof(cmd))) {
@@ -779,13 +780,14 @@ static int do_get_full_version(void __user *arg)
 // 101. HOOK_TYPE - Get hook type
 static int do_get_hook_type(void __user *arg)
 {
-    struct ksu_hook_type_cmd cmd = { 0 };
+    struct ksu_hook_type_cmd cmd;
 #ifdef CONFIG_KSU_SUSFS
     const char *type = "SUSFS Inline Hook";
 #else
     const char *type = "Manual Hook";
 #endif
 
+    memset(&cmd, 0, sizeof(cmd));
     strscpy(cmd.hook_type, type, sizeof(cmd.hook_type));
 
     if (copy_to_user(arg, &cmd, sizeof(cmd))) {
