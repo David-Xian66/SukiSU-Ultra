@@ -74,9 +74,16 @@ class SuperUserRepositoryImpl : SuperUserRepository {
                     val ai = it.applicationInfo ?: return@filter false
                     ai.uid != WEBVIEW_ZYGOTE_UID &&
                             (ai.flags and ApplicationInfo.FLAG_HAS_CODE) != 0
-                }.map {
-                    val appInfo = it.applicationInfo!!
-                    val profile = Natives.getAppProfile(it.packageName, appInfo.uid)
+                }.mapNotNull {
+                    val appInfo = it.applicationInfo ?: return@mapNotNull null
+                    // A single JNI failure (e.g. transient ksud / ioctl error on
+                    // Android 10) must not blank the whole SuperUser list.
+                    val profile = try {
+                        Natives.getAppProfile(it.packageName, appInfo.uid)
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "getAppProfile failed for ${it.packageName}", e)
+                        Natives.Profile(appInfo.loadLabel(pm).toString(), appInfo.uid)
+                    }
                     AppInfo(
                         label = appInfo.loadLabel(pm).toString(),
                         packageInfo = it,
@@ -85,20 +92,28 @@ class SuperUserRepositoryImpl : SuperUserRepository {
                 }.toMutableList()
 
                 // WebView Zygote is a single system UID, not a per-user package. Reuse the system icon.
-                val systemInfo = ApplicationInfo(pm.getApplicationInfo("android", 0)).apply {
-                    uid = WEBVIEW_ZYGOTE_UID
-                }
-                val placeholder = PackageInfo().apply {
-                    packageName = ""
-                    applicationInfo = systemInfo
-                }
-                newApps += AppInfo(
-                    label = "WebView Zygote",
-                    packageInfo = placeholder,
-                    profile = Natives.getAppProfile(WEBVIEW_ZYGOTE_PROFILE_KEY, WEBVIEW_ZYGOTE_UID),
-                    profileKey = WEBVIEW_ZYGOTE_PROFILE_KEY,
-                    special = true,
-                )
+                runCatching {
+                    val systemInfo = ApplicationInfo(pm.getApplicationInfo("android", 0)).apply {
+                        uid = WEBVIEW_ZYGOTE_UID
+                    }
+                    val placeholder = PackageInfo().apply {
+                        packageName = ""
+                        applicationInfo = systemInfo
+                    }
+                    val webViewProfile = try {
+                        Natives.getAppProfile(WEBVIEW_ZYGOTE_PROFILE_KEY, WEBVIEW_ZYGOTE_UID)
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "getAppProfile failed for WebViewZygote", e)
+                        Natives.Profile("WebView Zygote", WEBVIEW_ZYGOTE_UID)
+                    }
+                    newApps += AppInfo(
+                        label = "WebView Zygote",
+                        packageInfo = placeholder,
+                        profile = webViewProfile,
+                        profileKey = WEBVIEW_ZYGOTE_PROFILE_KEY,
+                        special = true,
+                    )
+                }.onFailure { Log.w(TAG, "skip WebView Zygote placeholder", it) }
 
                 Log.i(TAG, "load cost: ${SystemClock.elapsedRealtime() - start}")
                 Pair(newApps, idsArray.toList())

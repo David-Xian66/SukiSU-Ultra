@@ -27,15 +27,34 @@ class KsuService : RootService() {
 
     private fun getAllUserIds(): IntArray {
         val um = getSystemService(USER_SERVICE) as UserManager
-        // getAliveUsers() was added in API 31
+        // getAliveUsers() was added in API 31 — prefer it on newer devices
         try {
             val method = um.javaClass.getMethod("getAliveUsers")
             val users = method.invoke(um) as List<*>
-            return extractUserIds(users)
+            val ids = extractUserIds(users)
+            if (ids.isNotEmpty()) return ids
+        } catch (_: NoSuchMethodException) {
+            // API 29 / Android 10: fall through to getUsers()
+            Log.i(TAG, "getAliveUsers unavailable, using UserManager.getUsers()")
         } catch (e: Exception) {
             Log.e(TAG, "getAliveUsers reflection failed", e)
         }
 
+        // Fallback for Android 10 (API 29) and below.
+        // UserManager.getUsers() is a public API since API 17 and still works
+        // (deprecated in API 30). On Android 10 it returns the same set as
+        // getAliveUsers() does on API 30+.
+        try {
+            @Suppress("DEPRECATION")
+            val users = um.users
+            val ids = extractUserIds(users)
+            if (ids.isNotEmpty()) return ids
+        } catch (e: Exception) {
+            Log.e(TAG, "UserManager.getUsers() failed", e)
+        }
+
+        // Last-resort fallback so we never return an empty array and
+        // accidentally produce a zero-package response.
         return intArrayOf(0)
     }
 
