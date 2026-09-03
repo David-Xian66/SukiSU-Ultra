@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-#define MASK_SYSTEM (FS_CREATE | FS_MOVE | FS_EVENT_ON_CHILD)
+#define MASK_SYSTEM (FS_CREATE | FS_MOVE | FS_MODIFY | FS_EVENT_ON_CHILD)
 
 struct watch_dir {
     const char *path;
