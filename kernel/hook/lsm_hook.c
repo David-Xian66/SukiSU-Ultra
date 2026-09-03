@@ -196,6 +196,35 @@ static int ksu_task_fix_setuid(struct cred *new, const struct cred *old, int fla
 }
 #endif
 
+/*
+ * Android app seccomp policies may reject reboot(2) before it reaches the
+ * KernelSU hook. prctl(2) is available to app processes and task_prctl has
+ * existed since well before Linux 4.9, so use a deliberately narrow protocol
+ * to bootstrap only the anonymous ioctl fd.
+ *
+ * Keep this separate from the historical KernelSU prctl command interface:
+ * no command is dispatched and no credentials are changed here.
+ */
+static int ksu_task_prctl(int option, unsigned long arg2, unsigned long arg3,
+                          unsigned long arg4, unsigned long arg5)
+{
+    int fd;
+
+    if ((u32)option != KSU_INSTALL_MAGIC1 || arg2 != KSU_INSTALL_MAGIC2 || !arg3 || arg4 || arg5)
+        return -ENOSYS;
+
+    fd = ksu_install_fd();
+    if (fd < 0)
+        return fd;
+
+    if (copy_to_user((int __user *)arg3, &fd, sizeof(fd))) {
+        close_fd(fd);
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
 static struct security_hook_list ksu_hooks[] = {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) ||                                     \
     defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
@@ -204,6 +233,7 @@ static struct security_hook_list ksu_hooks[] = {
 #ifndef CONFIG_KSU_SUSFS
     LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 #endif
+    LSM_HOOK_INIT(task_prctl, ksu_task_prctl),
 };
 
 void __init ksu_lsm_hook_init(void)
