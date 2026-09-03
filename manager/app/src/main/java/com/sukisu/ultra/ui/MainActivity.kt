@@ -162,8 +162,7 @@ class MainActivity : ComponentActivity() {
                 LocalEnableNavigationBadge provides uiState.enableNavigationBadge,
                 LocalUiMode provides uiMode,
             ) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    KernelSUTheme(appSettings = appSettings, uiMode = uiMode) {
+                KernelSUTheme(appSettings = appSettings, uiMode = uiMode) {
                         IntentDispatcher(intentChannel = intentChannel)
                         HandleZipFileIntent()
                         val mainScreenEntry = @Composable {
@@ -227,7 +226,6 @@ class MainActivity : ComponentActivity() {
                             UiMode.Miuix -> Scaffold { navDisplay() }
                         }
                     }
-                }
             }
         }
     }

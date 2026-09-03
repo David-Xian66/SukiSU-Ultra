@@ -102,7 +102,6 @@ object ThemeController {
     }
 }
 
-@RequiresApi(Build.VERSION_CODES.S)
 @Composable
 fun KernelSUTheme(
     appSettings: AppSettings = ThemeController.getAppSettings(),
