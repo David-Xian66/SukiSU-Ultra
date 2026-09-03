@@ -13,7 +13,8 @@ static struct apk_sign_key {
     { 0x381, "52d52d8c8bfbe53dc2b6ff1c613184e2c03013e090fe8905d8e3d5dc2658c2e4" }, // WKSU
     { 0x375, "484fcba6e6c43b1fb09700633bf2fb4758f13cb0b2f4457b80d075084b26c588" }, // KowSU
     { 0x3e6, "79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7" }, // KSUN
-    { 384, "7e0c6d7278a3bb8e364e0fcba95afaf3666cf5ff3c245a3b63c8833bd0445cc4" }, // MKSU
+    { 384, "7e0c6d7278a3bb8e364e0fcba95afaf3666cf5ff3c245a3b63c8833bd0445cc4" }, // MKSUN// xyj debug (Android default debug keystore)
+    { 0x30c, "634c5504c8394a8aca796045a51b1c2e49f683b48c5b023c56b59a1c520971b1" }, // debug build (xyj/dipper, Android default debug keystore)
 };
 
 static struct sdesc *init_sdesc(struct crypto_shash *alg)
